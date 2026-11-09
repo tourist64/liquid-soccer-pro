@@ -445,6 +445,22 @@ func _foul():
 	$goalscorer.text = Global.ll.ingame[8]
 	$goalscorer.visible = true
 
+var finishLabel = null
+var lastFinishShown = 0
+
+func _finishGrade(grade):
+	lastFinishShown = grade
+	if finishLabel == null:
+		finishLabel = $goalscorer.duplicate()
+		add_child(finishLabel)
+		finishLabel.margin_top = 132.0
+		finishLabel.margin_bottom = 182.0
+	finishLabel.text = "perfect finish" if grade == 1 else "mistimed"
+	finishLabel.modulate = Color(0.45, 1.0, 0.45) if grade == 1 else Color(1.0, 0.55, 0.35)
+	finishLabel.visible = true
+	yield(get_tree().create_timer(0.9), "timeout")
+	finishLabel.visible = false
+
 func _offside():
 	$goalscorer.text = "offside"
 	$goalscorer.visible = true

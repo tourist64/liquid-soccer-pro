@@ -14,6 +14,16 @@ var pCurl = 0.75
 var pLongShot = 0.0
 var pPressRes = 0.0
 var pBallWin = 0.0
+# 11v11 timed finishing: 0 = ordinary shot, 1 = perfectly timed, 2 = mistimed.
+var finishGrade = 0
+const FINISH_WINDOW_FROM = 0.66
+const FINISH_WINDOW_TO = 0.95
+# 11v11 contain defending.
+var containing = false
+var containFor = 0.0
+const CONTAIN_GAP = 6.5
+const CONTAIN_SPEED = 0.92
+const CONTAIN_TACKLE_BONUS = 1.0
 var pStrength = 0.5
 var pBlock = 0.0
 var pAerial = 0.5
@@ -350,13 +360,24 @@ func shoot( var targ):
 		shotcurl.y *= 0.05
 	shotV += Vector3(0, yadd * (1.0 - shotcharge), 0)
 	
-	shotV.z += rand_range( - 0.2, 0.2) * (1.0 - pShoot) * (1.0 - longRange)
+	var shotError = rand_range( - 0.2, 0.2) * (1.0 - pShoot) * (1.0 - longRange)
+	if finishGrade == 1:
+		shotError = 0.0
+	elif finishGrade == 2:
+		shotError += rand_range( - 0.14, 0.14)
+		shotV.y += rand_range(0.04, 0.16)
+	shotV.z += shotError
 	
 	if (shotcurl.y > 0):
 		shotV.y += 0.05
 		shotcurl.y = shotcurl.y * - 2.1
 		shotcharge *= 1.1
 	shotV = shotV * lerp(100, lerp(130, 165, pShoot), 1.0 - shotcharge) * (1.0 + 0.2 * longRange)
+	if finishGrade == 1:
+		shotV *= 1.08
+	if finishGrade != 0:
+		Global.game._finishGrade(finishGrade)
+	finishGrade = 0
 	
 	
 	canControl = false
@@ -535,6 +556,9 @@ func checkInput():
 		
 		if shooting:
 			sp.visible = false
+			var windUp = shotcharge + 1.0
+			if Global.elevenMode and windUp >= FINISH_WINDOW_FROM and windUp <= FINISH_WINDOW_TO:
+				finishGrade = 1
 			shotcharge = shotTimer.time_left * 2.0
 			
 			shotTimer.stop()
@@ -649,6 +673,9 @@ func checkInput():
 				AI._thruPass(passD)
 		elif (Global.ballpos.y > 2):
 				AI._bicycleKick(true)
+	containing = ismov and _wantsContain()
+	if containing:
+		mov = _containMove(mov)
 	if ismov:
 		acc.x += mov.x * pAgility
 		acc.z += mov.y * pAgility
@@ -662,6 +689,27 @@ func checkInput():
 			AI._celebrateAnim(2)
 		elif Input.is_action_just_pressed(cthru):
 			AI._celebrateAnim(3)
+
+# Hold the through-ball button off the ball to jockey: stay goal-side, facing the carrier.
+func _wantsContain():
+	if not Global.elevenMode or not Global.gameOn or isAI or AI._hasBall():
+		return false
+	if not ball._isTrapped() or ball.player == null or ball.player.get("myTeam") == myTeam:
+		return false
+	return Input.is_action_pressed(cthru) and not Input.is_action_pressed(cpass)
+
+func _containMove(stick):
+	var carrier = ball.player
+	var at = carrier.translation + carrier.velocity * 0.2
+	var goalSide = dGoal - at
+	goalSide.y = 0.0
+	var spot = at + goalSide.normalized() * CONTAIN_GAP + Vector3(stick.x, 0.0, stick.y) * 4.0
+	var move = spot - translation
+	move.y = 0.0
+	var gap = move.length()
+	if gap < 0.5:
+		return Vector2.ZERO
+	return Vector2(move.x, move.z) / gap * min(gap / 4.0, 1.0)
 
 func _controlMe():
 	
@@ -727,7 +775,8 @@ func _process(delta):
 			pushforce *= pushcooldown
 			
 			
-			velocity = velocity.limit_length(pSpeed)
+			velocity = velocity.limit_length(min(pSpeed, pDSpeed * CONTAIN_SPEED) if containing else pSpeed)
+			containFor = 0.4 if containing else max(0.0, containFor - delta)
 			var vl = velocity.length()
 			
 			
@@ -755,6 +804,9 @@ func _process(delta):
 				view = lastview
 				
 				
+			if containing:
+				view = (ball.translation - translation).normalized() * max(vl, 1.0)
+				lastview = view
 			lastview.y = 0.5
 			if vl > 1.5:
 				rspeed = (vl / pOSpeed) * 1.33
@@ -1041,7 +1093,8 @@ func _holdScore(holder):
 		hold += (holderStr - pStrength) * 4.0
 	# Nobody is untackleable: press resistance only lowers the chance to about one in eight.
 	var chance = lerp(0.25, 0.12, res)
-	return min(hold, TACKLE_ROLL * (1.0 - chance)) - pBallWin * BALL_WIN_BONUS
+	var positioned = CONTAIN_TACKLE_BONUS if containFor > 0.0 else 0.0
+	return min(hold, TACKLE_ROLL * (1.0 - chance)) - pBallWin * BALL_WIN_BONUS - positioned
 
 func _on_HeadArea_body_entered(_body):
 	if (_body != ball) or ( not Global.gameOn) or not ball._isFree() or not canHead:
@@ -1132,6 +1185,8 @@ func _doNewShot():
 	
 	elif shooting:
 		shooting = false
+		if Global.elevenMode and not isAI:
+			finishGrade = 2
 		
 		var m = Vector2(Input.get_joy_axis(myC, clr), Input.get_joy_axis(myC, cud))
 		if Global.touchPad.isActive():
@@ -1151,6 +1206,8 @@ func _doNewShot():
 		shotcurl.z = - m.y * 3.25 * pCurl * jflip
 		if shotcharge < 0.0:
 			shotcharge = shotTimer.time_left * 2.0
+		if finishGrade == 2:
+			shotcharge = min(shotcharge, 0.1)
 	posI.visible = false
 	sp.visible = false
 	
